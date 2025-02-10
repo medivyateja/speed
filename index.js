@@ -2,7 +2,6 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 
-// Bot configuration
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) {
     console.error('TELEGRAM_BOT_TOKEN not found in .env file');
@@ -11,21 +10,16 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: true });
 
-// Ollama API configuration
 const OLLAMA_API_URL = process.env.OLLAMA_API_URL || 'http://localhost:11434/api/generate';
 const OLLAMA_MODEL = process.env.OLLAMA_MODEL || 'llama2';
 
-// Rate limiting and spam protection configuration
-const SPAM_THRESHOLD = 5; // Number of rapid messages before warning
-const SPAM_BAN_THRESHOLD = 8; // Number of rapid messages before ban
-const SPAM_WINDOW = 60000; // Time window for spam detection (1 minute)
-const MESSAGE_COOLDOWN = 3000; // Minimum time between messages (3 seconds)
+const SPAM_THRESHOLD = 5;
+const SPAM_WINDOW = 60000;
+const MESSAGE_COOLDOWN = 3000;
 
-// User state tracking
 const userStates = new Map();
 const processingUsers = new Set();
 
-// Initialize or get user state
 function getUserState(userId) {
     if (!userStates.has(userId)) {
         userStates.set(userId, {
@@ -40,14 +34,12 @@ function getUserState(userId) {
     return userStates.get(userId);
 }
 
-// Reset spam count after window
 function resetSpamCount(userId) {
     const userState = getUserState(userId);
     userState.messageCount = 0;
     userState.spamTimer = null;
 }
 
-// Speed's characteristics and common phrases
 const SPEED_CHARACTERISTICS = {
     catchphrases: [
         "SEWEY!",
@@ -79,11 +71,9 @@ const SPEED_CHARACTERISTICS = {
     }
 };
 
-// Function to add Speed's personality to responses
 function addSpeedPersonality(response) {
     let modifiedResponse = response;
     
-    // Remove any existing catchphrases to avoid duplication
     SPEED_CHARACTERISTICS.catchphrases.forEach(phrase => {
         modifiedResponse = modifiedResponse.replace(new RegExp(phrase, 'gi'), '');
     });
@@ -113,21 +103,18 @@ function addSpeedPersonality(response) {
     return modifiedResponse.trim();
 }
 
-// Function to check if message is about Speed's interests
 function isAboutSpeedInterests(message) {
     return SPEED_CHARACTERISTICS.interests.some(interest => 
         message.toLowerCase().includes(interest.toLowerCase())
     );
 }
 
-// Enhanced prompt generation for Ollama
 function generatePrompt(userMessage) {
     return `You are IShowSpeed (Speed), a 19-year-old energetic YouTuber and streamer known for your dramatic personality and love for Cristiano Ronaldo. You are extremely passionate about football/soccer, particularly about Ronaldo, and you often get very excited and use caps lock. You like to use words like "bro" and "fam". Keep your response concise and energetic.
 
 Current message to respond to: "${userMessage}"`;
 }
 
-// Function to check Ollama connection
 async function checkOllamaConnection() {
     try {
         await axios.post(OLLAMA_API_URL, {
@@ -142,7 +129,6 @@ async function checkOllamaConnection() {
     }
 }
 
-// Function to generate response using Ollama
 async function generateResponse(prompt) {
     try {
         const response = await axios.post(OLLAMA_API_URL, {
@@ -169,7 +155,6 @@ async function generateResponse(prompt) {
     }
 }
 
-// Function to process message queue
 async function processMessageQueue(userId, chatId) {
     const userState = getUserState(userId);
     
@@ -189,14 +174,12 @@ async function processMessageQueue(userId, chatId) {
         userState.isProcessing = false;
         userState.lastMessageTime = Date.now();
         
-        // Process next message in queue after cooldown
         setTimeout(() => {
             processMessageQueue(userId, chatId);
         }, MESSAGE_COOLDOWN);
     }
 }
 
-// Function to handle spam warnings and bans
 async function handleSpamProtection(userId, chatId) {
     const userState = getUserState(userId);
     userState.messageCount++;
@@ -205,31 +188,22 @@ async function handleSpamProtection(userId, chatId) {
         userState.spamTimer = setTimeout(() => resetSpamCount(userId), SPAM_WINDOW);
     }
 
-    if (userState.messageCount >= SPAM_BAN_THRESHOLD) {
-        // Ban user
-        try {
-            await bot.sendMessage(chatId, "YO FAM, I TRIED TO WARN YOU ABOUT SPAMMING! Now I gotta ban you bro... SEWEY! 🚫");
-            await bot.banChatMember(chatId, userId);
-            userStates.delete(userId);
-        } catch (error) {
-            console.error('Error banning user:', error);
-        }
-        return true;
-    } else if (userState.messageCount >= SPAM_THRESHOLD) {
-        // Warning
-        if (userState.warnings < 2) {
-            userState.warnings++;
-            await bot.sendMessage(chatId, "Yo bro, you're sending messages TOO FAST! Chill out or I might have to ban you! SEWEY! ⚠️");
-        }
+    if (userState.messageCount >= SPAM_THRESHOLD && userState.warnings < 2) {
+        userState.warnings++;
+        await bot.sendMessage(chatId, "Yo bro, you're sending messages TOO FAST! Chill out! SEWEY! ⚠️");
     }
-    return false;
+
+    return userState.messageCount > SPAM_THRESHOLD;
 }
 
-// Handle incoming messages
 bot.on('message', async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
     const userMessage = msg.text;
+    
+    if (userMessage === '/start') {
+        return;
+    }
     
     if (!userMessage) {
         await bot.sendMessage(chatId, "Yo bro, send me some text to respond to!");
@@ -238,35 +212,28 @@ bot.on('message', async (msg) => {
 
     const userState = getUserState(userId);
     
-    // Check for spam
-    const isBanned = await handleSpamProtection(userId, chatId);
-    if (isBanned) return;
+    const isSpamming = await handleSpamProtection(userId, chatId);
+    if (isSpamming) return;
 
-    // Check if user is sending messages too quickly
     const timeSinceLastMessage = Date.now() - userState.lastMessageTime;
     if (timeSinceLastMessage < MESSAGE_COOLDOWN && userState.isProcessing) {
         await bot.sendMessage(chatId, "Yo fam, let me answer your first message before sending another one! SEWEY!");
         return;
     }
 
-    // Add message to queue
     userState.messageQueue.push(userMessage);
     
-    // Show typing status
     bot.sendChatAction(chatId, 'typing');
     
-    // Process queue
     processMessageQueue(userId, chatId);
 });
 
-// Handle /start command
 bot.onText(/\/start/, async (msg) => {
     const chatId = msg.chat.id;
     const welcomeMessage = "SEWEY! What's good bro! I'm Speed, and I'm here to chat with you! Let's talk about soccer, gaming, or whatever you want! CR7 THE GOAT!";
     await bot.sendMessage(chatId, welcomeMessage);
 });
 
-// Main function to start the bot
 async function startBot() {
     console.log('Checking Ollama connection...');
     const ollamaAvailable = await checkOllamaConnection();
@@ -283,12 +250,10 @@ async function startBot() {
     console.log('Speed bot is running... SEWEY!');
 }
 
-// Handle errors
 bot.on('error', (error) => {
     console.error('Telegram bot error:', error);
 });
 
-// Cleanup function to clear user states periodically
 setInterval(() => {
     const now = Date.now();
     for (const [userId, state] of userStates.entries()) {
@@ -298,5 +263,4 @@ setInterval(() => {
     }
 }, SPAM_WINDOW * 2);
 
-// Start the bot
 startBot();
